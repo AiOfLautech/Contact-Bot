@@ -1,14 +1,13 @@
 {
   "name": "telegram-whatsapp-bot",
   "version": "1.0.0",
-  "description": "A bot to send WhatsApp messages using Telegram",
+  "description": "Telegram bot for sending WhatsApp messages",
   "main": "bot.js",
   "scripts": {
     "start": "node bot.js"
   },
   "dependencies": {
     "dotenv": "^16.0.3",
-    "node-fetch": "^3.3.0",
     "node-telegram-bot-api": "^0.61.0",
     "vcard4": "^1.0.0",
     "whatsapp-web.js": "^1.18.6"
