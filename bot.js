@@ -2,7 +2,7 @@ require('dotenv').config();
 const TelegramBot = require('node-telegram-bot-api');
 const fs = require('fs');
 const { Client, LocalAuth } = require('whatsapp-web.js');
-const vCard = require('vcard-parser');
+const vCard = require('vcard4');
 const fetch = require('node-fetch');
 
 // Initialize Telegram bot
@@ -40,7 +40,7 @@ bot.on('message', async (msg) => {
         const contacts = vCard.parse(vcfData);
 
         // Extract phone numbers
-        const phoneNumbers = contacts.map(contact => contact.tel.value);
+        const phoneNumbers = contacts.map(contact => contact.tel[0].value);
 
         bot.sendMessage(chatId, 'VCF file received. Please enter the message you want to send:');
         
