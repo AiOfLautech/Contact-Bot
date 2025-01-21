@@ -3,7 +3,6 @@ const TelegramBot = require('node-telegram-bot-api');
 const fs = require('fs');
 const { Client, LocalAuth } = require('whatsapp-web.js');
 const vCard = require('vcard4');
-const fetch = require('node-fetch');
 
 // Initialize Telegram bot
 const telegramBotToken = process.env.TELEGRAM_BOT_TOKEN;
@@ -17,79 +16,91 @@ const whatsappClient = new Client({
 });
 whatsappClient.initialize();
 
+// Load and parse VCF file
+let contacts = [];
+try {
+    const vcfData = fs.readFileSync('./Group_Contacts.vcf', 'utf-8');
+    const parsedContacts = vCard.parse(vcfData);
+
+    contacts = parsedContacts.map((contact, index) => ({
+        name: contact.fn || `Contact ${index + 1}`,
+        phone: contact.tel[0]?.value || null,
+    })).filter(contact => contact.phone); // Filter out invalid contacts
+    console.log(`Loaded ${contacts.length} contacts.`);
+} catch (error) {
+    console.error('Failed to load VCF file:', error.message);
+}
+
 // Store user sessions
 let userSessions = {};
 
 // Handle Telegram messages
-bot.on('message', async (msg) => {
+bot.on('message', (msg) => {
     const chatId = msg.chat.id;
 
-    if (msg.document && msg.document.mime_type === 'text/x-vcard') {
-        const fileId = msg.document.file_id;
+    // Start interaction
+    bot.sendMessage(chatId, 'Select the contacts to message:', {
+        reply_markup: {
+            inline_keyboard: contacts.map((contact, index) => [{
+                text: contact.name,
+                callback_data: `${index}`,
+            }]),
+        },
+    });
 
-        // Download .vcf file
-        const file = await bot.getFile(fileId);
-        const filePath = file.file_path;
-        const fileUrl = `https://api.telegram.org/file/bot${telegramBotToken}/${filePath}`;
-
-        // Save the file locally
-        const localFilePath = `./contacts/${Date.now()}_contacts.vcf`;
-        const response = await fetch(fileUrl);
-        const fileBuffer = await response.arrayBuffer();
-        fs.writeFileSync(localFilePath, Buffer.from(fileBuffer));
-
-        // Parse the .vcf file
-        const vcfData = fs.readFileSync(localFilePath, 'utf-8');
-        const contacts = vCard.parse(vcfData);
-
-        // Extract contact names and numbers
-        const contactButtons = contacts.map((contact, index) => ({
-            text: contact.fn || `Contact ${index + 1}`,
-            callback_data: contact.tel[0].value,
-        }));
-
-        userSessions[chatId] = { contacts: contactButtons };
-
-        // Show contacts as inline buttons
-        bot.sendMessage(chatId, 'Select the contacts to send the message:', {
-            reply_markup: {
-                inline_keyboard: contactButtons.map((contact) => [contact]),
-            },
-        });
-    } else {
-        bot.sendMessage(chatId, 'Please upload a valid .vcf file.');
-    }
+    // Initialize user session
+    userSessions[chatId] = {
+        selectedContacts: [],
+    };
 });
 
-// Handle button clicks (contact selection)
+// Handle inline button clicks for contact selection
 bot.on('callback_query', (query) => {
     const chatId = query.message.chat.id;
-    const selectedContact = query.data;
+    const session = userSessions[chatId];
+    const contactIndex = parseInt(query.data, 10);
 
-    if (!userSessions[chatId].selectedContacts) {
-        userSessions[chatId].selectedContacts = [];
+    if (!session) return;
+
+    // Toggle selection
+    const selectedContact = contacts[contactIndex];
+    const alreadySelected = session.selectedContacts.some(
+        (contact) => contact.phone === selectedContact.phone
+    );
+
+    if (alreadySelected) {
+        // Deselect the contact
+        session.selectedContacts = session.selectedContacts.filter(
+            (contact) => contact.phone !== selectedContact.phone
+        );
+        bot.answerCallbackQuery(query.id, `${selectedContact.name} deselected.`);
+    } else {
+        // Select the contact
+        session.selectedContacts.push(selectedContact);
+        bot.answerCallbackQuery(query.id, `${selectedContact.name} selected.`);
     }
 
-    userSessions[chatId].selectedContacts.push(selectedContact);
-
-    bot.sendMessage(chatId, `Contact ${selectedContact} selected. Enter the message to send:`);
+    // Optionally display selected count
+    bot.sendMessage(chatId, `Selected ${session.selectedContacts.length} contacts.`);
 });
 
-// Handle user message input
+// Handle custom message input
 bot.on('message', (msg) => {
     const chatId = msg.chat.id;
     const session = userSessions[chatId];
 
-    if (session && session.selectedContacts && msg.text && !msg.document) {
+    // Check if a message is sent after selection
+    if (session && session.selectedContacts.length > 0 && msg.text) {
         const message = msg.text;
 
-        session.selectedContacts.forEach((number) => {
-            whatsappClient.sendMessage(number, message)
-                .then(() => console.log(`Message sent to ${number}`))
-                .catch((err) => console.error(`Failed to send message to ${number}:`, err));
+        // Send message to all selected contacts
+        session.selectedContacts.forEach((contact) => {
+            whatsappClient.sendMessage(contact.phone, message)
+                .then(() => console.log(`Message sent to ${contact.phone}`))
+                .catch((err) => console.error(`Failed to send message to ${contact.phone}:`, err));
         });
 
-        bot.sendMessage(chatId, 'Messages sent successfully!');
-        delete userSessions[chatId];
+        bot.sendMessage(chatId, `Message sent to ${session.selectedContacts.length} contacts.`);
+        delete userSessions[chatId]; // Clear session after sending
     }
 });
