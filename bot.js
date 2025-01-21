@@ -17,6 +17,9 @@ const whatsappClient = new Client({
 });
 whatsappClient.initialize();
 
+// Store user sessions
+let userSessions = {};
+
 // Handle Telegram messages
 bot.on('message', async (msg) => {
     const chatId = msg.chat.id;
@@ -39,24 +42,54 @@ bot.on('message', async (msg) => {
         const vcfData = fs.readFileSync(localFilePath, 'utf-8');
         const contacts = vCard.parse(vcfData);
 
-        // Extract phone numbers
-        const phoneNumbers = contacts.map(contact => contact.tel[0].value);
+        // Extract contact names and numbers
+        const contactButtons = contacts.map((contact, index) => ({
+            text: contact.fn || `Contact ${index + 1}`,
+            callback_data: contact.tel[0].value,
+        }));
 
-        bot.sendMessage(chatId, 'VCF file received. Please enter the message you want to send:');
-        
-        // Handle message input
-        bot.once('message', (msg) => {
-            const message = msg.text;
+        userSessions[chatId] = { contacts: contactButtons };
 
-            phoneNumbers.forEach((number) => {
-                whatsappClient.sendMessage(number, message)
-                    .then(() => console.log(`Message sent to ${number}`))
-                    .catch(err => console.error(`Failed to send message to ${number}: ${err}`));
-            });
-
-            bot.sendMessage(chatId, 'Messages sent successfully!');
+        // Show contacts as inline buttons
+        bot.sendMessage(chatId, 'Select the contacts to send the message:', {
+            reply_markup: {
+                inline_keyboard: contactButtons.map((contact) => [contact]),
+            },
         });
     } else {
         bot.sendMessage(chatId, 'Please upload a valid .vcf file.');
+    }
+});
+
+// Handle button clicks (contact selection)
+bot.on('callback_query', (query) => {
+    const chatId = query.message.chat.id;
+    const selectedContact = query.data;
+
+    if (!userSessions[chatId].selectedContacts) {
+        userSessions[chatId].selectedContacts = [];
+    }
+
+    userSessions[chatId].selectedContacts.push(selectedContact);
+
+    bot.sendMessage(chatId, `Contact ${selectedContact} selected. Enter the message to send:`);
+});
+
+// Handle user message input
+bot.on('message', (msg) => {
+    const chatId = msg.chat.id;
+    const session = userSessions[chatId];
+
+    if (session && session.selectedContacts && msg.text && !msg.document) {
+        const message = msg.text;
+
+        session.selectedContacts.forEach((number) => {
+            whatsappClient.sendMessage(number, message)
+                .then(() => console.log(`Message sent to ${number}`))
+                .catch((err) => console.error(`Failed to send message to ${number}:`, err));
+        });
+
+        bot.sendMessage(chatId, 'Messages sent successfully!');
+        delete userSessions[chatId];
     }
 });
