@@ -1,0 +1,14 @@
+{
+  "welcome": "Welcome to the WhatsApp Appeals Bot!",
+  "submit_appeal": "Submit an Appeal",
+  "view_history": "View Appeal History",
+  "change_language": "Change Language",
+  "select_language": "Select your preferred language:",
+  "language_changed": "Language changed successfully!",
+  "provide_details": "Please provide your phone number and reason for the appeal in this format:\n\n+1234567890 | My reason...",
+  "invalid_format": "Invalid format! Please use this format:\n\n+1234567890 | My reason...",
+  "email_error": "Error while sending your appeal via email. Please try again later.",
+  "appeal_sent": "Your appeal has been successfully submitted!",
+  "no_history": "You have no appeal history.",
+  "history": "Here is your appeal history:\n"
+}
