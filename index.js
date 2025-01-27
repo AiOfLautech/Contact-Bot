@@ -6,7 +6,7 @@ const schedule = require("node-schedule");
 const express = require("express");
 require("dotenv").config();
 
-// Configuration
+// Bot Configuration
 const bot = new Telegraf(process.env.BOT_TOKEN);
 const app = express();
 const PORT = process.env.PORT || 3000;
