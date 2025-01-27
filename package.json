@@ -4,8 +4,8 @@
   "description": "A Telegram bot to automate WhatsApp appeal submissions.",
   "main": "index.js",
   "scripts": {
-    "start": "node bot.js",
-    "dev": "nodemon bot.js"
+    "start": "node index.js",
+    "dev": "nodemon index.js"
   },
   "dependencies": {
     "express": "^4.18.2",
@@ -17,5 +17,16 @@
   },
   "devDependencies": {
     "nodemon": "^3.0.1"
-  }
+  },
+  "engines": {
+    "node": ">=14.0.0"
+  },
+  "keywords": [
+    "telegram",
+    "bot",
+    "mongodb",
+    "appeals"
+  ],
+  "author": "AI OF LAUTECH",
+  "license": "MIT"
 }
