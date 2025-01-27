@@ -1,0 +1,12 @@
+{
+  "welcome": "مرحبًا بك في بوت استئناف WhatsApp!\n\nاتبع هذه الخطوات للمتابعة:\n- تيليجرام: {{telegram}}\n- تيك توك: {{telegram}}\n- واتساب: {{phone}}\n\nبواسطة AI OF LAUTECH",
+  "follow_telegram": "تابع على تيليجرام",
+  "follow_tiktok": "تابع على تيك توك",
+  "follow_whatsapp": "تابع على واتساب",
+  "continue": "متابعة",
+  "provide_details": "يرجى تقديم رقم هاتفك.",
+  "select_ban_type": "اختر نوع الحظر:",
+  "temporary_ban": "حظر مؤقت",
+  "permanent_ban": "حظر دائم",
+  "appeal_sent": "تم إرسال استئنافك بنجاح!"
+}
