@@ -21,12 +21,6 @@
   "engines": {
     "node": ">=14.0.0"
   },
-  "keywords": [
-    "telegram",
-    "bot",
-    "mongodb",
-    "appeals"
-  ],
   "author": "AI OF LAUTECH",
   "license": "MIT"
 }
