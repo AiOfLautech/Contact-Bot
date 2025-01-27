@@ -1,0 +1,14 @@
+{
+  "welcome": "¡Bienvenido al Bot de Apelaciones de WhatsApp!",
+  "submit_appeal": "Enviar una Apelación",
+  "view_history": "Ver Historial de Apelaciones",
+  "change_language": "Cambiar Idioma",
+  "select_language": "Selecciona tu idioma preferido:",
+  "language_changed": "¡Idioma cambiado con éxito!",
+  "provide_details": "Por favor, proporciona tu número de teléfono y el motivo de la apelación en este formato:\n\n+1234567890 | Mi motivo...",
+  "invalid_format": "¡Formato inválido! Por favor, usa este formato:\n\n+1234567890 | Mi motivo...",
+  "email_error": "Error al enviar tu apelación por correo electrónico. Por favor, inténtalo de nuevo más tarde.",
+  "appeal_sent": "¡Tu apelación ha sido enviada con éxito!",
+  "no_history": "No tienes historial de apelaciones.",
+  "history": "Aquí está tu historial de apelaciones:\n"
+}
