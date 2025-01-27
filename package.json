@@ -1,17 +1,21 @@
 {
-  "name": "telegram-whatsapp-bot",
+  "name": "telegram-appeal-bot",
   "version": "1.0.0",
-  "description": "Telegram bot for sending WhatsApp messages",
-  "main": "bot.js",
+  "description": "A Telegram bot to automate WhatsApp appeal submissions.",
+  "main": "index.js",
   "scripts": {
-    "start": "node bot.js"
+    "start": "node index.js",
+    "dev": "nodemon index.js"
   },
   "dependencies": {
-    "dotenv": "^16.0.3",
     "express": "^4.18.2",
-    "node-fetch": "^3.3.0",
-    "node-telegram-bot-api": "^0.61.0",
-    "vcard4": "^1.0.0",
-    "whatsapp-web.js": "^1.18.6"
+    "i18n": "^0.15.1",
+    "mongoose": "^7.1.1",
+    "nodemailer": "^6.9.3",
+    "node-schedule": "^2.1.1",
+    "telegraf": "^4.12.2"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.1"
   }
 }
