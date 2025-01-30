@@ -1,0 +1,19 @@
+# Ignore node_modules folder
+node_modules/
+
+# Ignore environment variables file
+.env
+
+# Ignore database.json (for local storage of user data)
+database.json
+
+# Ignore log files
+*.log
+
+# Ignore npm debug log files
+npm-debug.log*
+
+# Ignore all files in the /build/ folder (if you have any build folder)
+build/
+
+# Ignore any other files you don’t want to commit (you can add others as needed)
