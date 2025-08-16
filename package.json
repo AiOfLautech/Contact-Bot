@@ -4,8 +4,8 @@
   "description": "Telegram bot for WhatsApp broadcast using VCF contacts and pairing code authentication",
   "main": "bot.js",
   "scripts": {
-    "start": "node bot.js",
-    "dev": "nodemon bot.js"
+    "start": "node index.js",
+    "dev": "nodemon index.js"
   },
   "dependencies": {
     "@whiskeysockets/baileys": "^6.7.0",
