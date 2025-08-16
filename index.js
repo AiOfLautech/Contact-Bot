@@ -8,7 +8,7 @@ const fs = require('fs').promises;
 const path = require('path');
 
 // Configuration
-const BOT_TOKEN = process.env.BOT_TOKEN || 'YOUR_TELEGRAM_BOT_TOKEN';
+const BOT_TOKEN = process.env.BOT_TOKEN || '7949174907:AAEHdgV6jukXB3gysOYTMLiTMI2pYpOKqAQ';
 const AUTH_FOLDER = './whatsapp_auth';
 
 // Create auth directory
