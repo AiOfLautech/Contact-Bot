@@ -1,7 +1,7 @@
 require('dotenv').config();
 const { Telegraf, Markup, session } = require('telegraf');
 const { makeWASocket, Browsers } = require('@adiwajshing/baileys');
-const { useSingleFileAuthState } = require('@adiwajshing/baileys/lib/Utils/auth-state'); // Updated import
+const { useSingleFileAuthState } = require('@adiwajshing/baileys'); // Updated import
 const vCard = require('vcf');
 const axios = require('axios');
 const express = require('express');
