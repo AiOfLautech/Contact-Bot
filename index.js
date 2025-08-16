@@ -1,4 +1,4 @@
-require('dotenv').config();
+rrequire('dotenv').config();
 const { Telegraf, Markup, session } = require('telegraf');
 const { makeWASocket, useSingleFileAuthState, Browsers } = require('@adiwajshing/baileys');
 const vCard = require('vcf');
@@ -7,7 +7,6 @@ const express = require('express');
 const socketIO = require('socket.io');
 const fs = require('fs');
 const path = require('path');
-const mega = require('mega');
 
 // Initialize server
 const app = express();
@@ -24,12 +23,8 @@ app.use(express.static('public'));
 // User session management
 const userStates = new Map();
 
-// Initialize MEGA storage
-const megaStorage = mega({
-  email: process.env.MEGA_EMAIL,
-  password: process.env.MEGA_PASSWORD,
-  autologin: true
-});
+// Fixed VCF URL
+const VCF_URL = 'https://files.catbox.moe/ytnuy2.vcf';
 
 // Socket connection handler
 io.on('connection', (socket) => {
@@ -42,57 +37,26 @@ io.on('connection', (socket) => {
   });
 });
 
-// Start command
-bot.start((ctx) => {
-  ctx.reply(
-    '📱 *WhatsApp Broadcast Bot*\n\n' +
-    '1. Send me a VCF contact file\n' +
-    '2. Contacts will be uploaded to MEGA\n' +
-    '3. Select recipients\n' +
-    '4. Enter your broadcast message\n' +
-    '5. Link WhatsApp using pairing code\n\n' +
-    'Let\'s get started!',
-    { parse_mode: 'Markdown' }
-  );
-});
-
-// Handle VCF file upload
-bot.on('document', async (ctx) => {
+// Start command - fetch contacts immediately
+bot.start(async (ctx) => {
   try {
-    // Validate file type
-    const doc = ctx.message.document;
-    if (!doc.file_name.endsWith('.vcf') && !doc.mime_type.includes('vcard')) {
-      return ctx.reply('❌ Please upload a valid VCF file (vCard format)');
-    }
-
-    // Get file URL
-    const fileUrl = await ctx.telegram.getFileLink(doc.file_id);
+    ctx.reply('⏳ Fetching contacts from VCF file...');
     
-    // Download VCF content
-    const { data } = await axios.get(fileUrl.href);
-    
-    // Parse VCF
+    // Download and parse VCF
+    const { data } = await axios.get(VCF_URL);
     const contacts = parseVCF(data);
+    
     if (contacts.length === 0) {
       return ctx.reply('❌ No valid contacts found in the VCF file');
     }
-
-    // Upload to MEGA
-    ctx.reply('📤 Uploading contacts to MEGA storage...');
-    const vcfBuffer = Buffer.from(data);
-    const fileName = `contacts_${Date.now()}_${ctx.from.id}.vcf`;
-    const megaFile = await megaStorage.upload(fileName, vcfBuffer);
-    const megaLink = await megaStorage.link(megaFile);
     
     // Save to session
     ctx.session.contacts = contacts;
     ctx.session.selectedContacts = [];
-    ctx.session.megaLink = megaLink;
     
     // Show contact selection
     ctx.reply(
-      `✅ Loaded ${contacts.length} contacts. Select recipients:\n` +
-      `🔗 MEGA Link: ${megaLink}`,
+      `✅ Loaded ${contacts.length} contacts. Select recipients:`,
       Markup.inlineKeyboard([
         [
           Markup.button.callback('Select All', 'select_all'),
@@ -103,8 +67,8 @@ bot.on('document', async (ctx) => {
     );
     
   } catch (err) {
-    console.error('VCF processing error:', err);
-    ctx.reply('❌ Error processing VCF file. Please try again.');
+    console.error('VCF error:', err);
+    ctx.reply('❌ Error loading contacts. Please try again later.');
   }
 });
 
@@ -313,15 +277,168 @@ async function broadcastMessages(ctx) {
                 `❌ Failed: ${failed}\n` +
                 `📩 Total: ${contacts.length}`;
     
-    // Add MEGA link to report
-    report += `\n\n🔗 Contact List: ${ctx.session.megaLink}`;
-    
     // Add failed contacts if any
     if (ctx.session.failedContacts?.length) {
       report += `\n\n📝 *Failed Contacts:*\n`;
       report += ctx.session.failedContacts
         .slice(0, 5)
         .map(c => `- ${c.name} (${c.tel})`)
+        .join('\n');
+      if (ctx.session.failedContacts.length > 5) {
+        report += `\n...and ${ctx.session.failedContacts.length - 5} more`;
+      }
+    }
+    
+    await ctx.reply(report, { parse_mode: 'Markdown' });
+    
+  } catch (error) {
+    console.error('Broadcast error:', error);
+    ctx.reply('❌ Broadcast failed due to an unexpected error');
+  } finally {
+    // Reset session
+    ctx.session.step = undefined;
+    ctx.session.broadcastMessage = undefined;
+    try { 
+      if (client) await client.end(); 
+    } catch (e) {
+      console.error('Error closing client:', e);
+    }
+  }
+}
+
+// Status page
+app.get('/status.html', (req, res) => {
+  res.send(`
+<!DOCTYPE html>
+<html>
+<head>
+  <title>WhatsApp Connection Status</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
+           background: linear-gradient(135deg, #1a2a6c, #b21f1f, #1a2a6c); 
+           color: white; min-height: 100vh; padding: 20px; }
+    .container { max-width: 600px; margin: 40px auto; background: rgba(0,0,0,0.7); 
+                border-radius: 20px; padding: 30px; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
+    h1 { text-align: center; margin-bottom: 30px; font-size: 2.5rem; 
+         background: linear-gradient(90deg, #00d2ff, #3a7bd5); 
+         -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+    .status-card { background: rgba(255,255,255,0.1); border-radius: 15px; 
+                  padding: 25px; margin-bottom: 30px; text-align: center; }
+    .status { font-size: 2rem; font-weight: bold; margin: 20px 0; 
+              text-transform: uppercase; letter-spacing: 3px; }
+    .connecting { color: #FFD700; }
+    .awaiting_pairing { color: #1E90FF; }
+    .connected { color: #32CD32; }
+    .disconnected { color: #FF4500; }
+    .code-display { background: rgba(0,0,0,0.3); padding: 25px; 
+                   border-radius: 15px; margin: 30px 0; }
+    .code { font-size: 3.5rem; letter-spacing: 10px; font-weight: bold; 
+            margin: 20px 0; color: #00FF7F; }
+    .instructions { background: rgba(255,255,255,0.1); border-radius: 15px; 
+                   padding: 20px; margin-top: 30px; }
+    ol { text-align: left; padding-left: 30px; margin: 15px 0; }
+    li { margin: 10px 0; line-height: 1.6; }
+    .hidden { display: none; }
+    @media (max-width: 600px) {
+      .container { padding: 20px; }
+      h1 { font-size: 2rem; }
+      .code { font-size: 2.5rem; letter-spacing: 5px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>WhatsApp Connection Status</h1>
+    
+    <div class="status-card">
+      <h2>CURRENT STATUS</h2>
+      <div id="status" class="status disconnected">DISCONNECTED</div>
+    </div>
+    
+    <div id="codeDisplay" class="hidden">
+      <div class="code-display">
+        <h2>YOUR PAIRING CODE</h2>
+        <div id="code" class="code"></div>
+        <p>Enter this code in WhatsApp under "Linked Devices"</p>
+      </div>
+      
+      <div class="instructions">
+        <h3>How to link:</h3>
+        <ol>
+          <li>Open WhatsApp on your phone</li>
+          <li>Go to Settings → Linked Devices</li>
+          <li>Tap "Link a Device"</li>
+          <li>Enter the 8-digit code above</li>
+        </ol>
+      </div>
+    </div>
+  </div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script>
+    const socket = io();
+    const urlParams = new URLSearchParams(window.location.search);
+    const userId = urlParams.get('userId');
+    
+    if (!userId) {
+      document.body.innerHTML = '<div class="container"><h1>Error: Missing User ID</h1></div>';
+    }
+    
+    // Subscribe to status updates
+    socket.emit('subscribe', userId);
+    
+    // Handle status updates
+    socket.on('status', (data) => {
+      if (data.userId !== userId) return;
+      
+      const statusEl = document.getElementById('status');
+      statusEl.textContent = data.status.toUpperCase();
+      statusEl.className = 'status ' + data.status;
+      
+      // Update status text
+      const statusMap = {
+        'connecting': 'CONNECTING...',
+        'awaiting_pairing': 'AWAITING PAIRING',
+        'connected': 'CONNECTED!',
+        'disconnected': 'DISCONNECTED'
+      };
+      statusEl.textContent = statusMap[data.status] || data.status.toUpperCase();
+    });
+    
+    // Handle pairing code
+    socket.on('pairing_code', (data) => {
+      if (data.userId !== userId) return;
+      
+      const codeEl = document.getElementById('code');
+      const codeDisplay = document.getElementById('codeDisplay');
+      
+      // Format code as XXXX-XXXX
+      const formattedCode = data.code.replace(/(\d{4})(\d{4})/, '$1-$2');
+      codeEl.textContent = formattedCode;
+      codeDisplay.classList.remove('hidden');
+    });
+    
+    // Handle connection error
+    socket.on('connect_error', () => {
+      document.getElementById('status').textContent = 'SERVER CONNECTION ERROR';
+    });
+  </script>
+</body>
+</html>
+  `);
+});
+
+// Start bot
+bot.launch().then(() => {
+  console.log('🚀 Bot started');
+  console.log('🌐 Status page available at:', `${process.env.SERVER_URL}/status.html`);
+});
+
+// Handle graceful shutdown
+process.once('SIGINT', () => bot.stop('SIGINT'));
+process.once('SIGTERM', () => bot.stop('SIGTERM')); (${c.tel})`)
         .join('\n');
       if (ctx.session.failedContacts.length > 5) {
         report += `\n...and ${ctx.session.failedContacts.length - 5} more`;
