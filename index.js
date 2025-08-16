@@ -1,326 +1,362 @@
-require('dotenv').config();
-const { Telegraf, Markup, session } = require('telegraf');
-const { makeWASocket, useSingleFileAuthState, Browsers } = require('@adiwajshing/baileys');
-const vCard = require('vcf');
+const { Telegraf } = require('telegraf');
+const { message } = require('telegraf/filters');
+const { makeWASocket, useMultiFileAuthState, DisconnectReason, Browsers } = require('@whiskeysockets/baileys');
 const axios = require('axios');
-const express = require('express');
-const socketIO = require('socket.io');
-const fs = require('fs');
+const vCard = require('vcf');
+const pino = require('pino');
+const fs = require('fs').promises;
 const path = require('path');
 
-// Initialize server
-const app = express();
-const server = app.listen(process.env.PORT || 3000);
-const io = socketIO(server);
+// Configuration
+const BOT_TOKEN = process.env.BOT_TOKEN || 'YOUR_TELEGRAM_BOT_TOKEN';
+const AUTH_FOLDER = './whatsapp_auth';
 
-// Create bot
-const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
+// Create auth directory
+fs.mkdir(AUTH_FOLDER, { recursive: true }).catch(console.error);
 
-// Middleware setup
-bot.use(session());
-app.use(express.static('public'));
+// Initialize bot
+const bot = new Telegraf(BOT_TOKEN);
+const sessions = new Map();
 
-// User session management
-const userStates = new Map();
-
-// Fixed VCF URL
-const VCF_URL = 'https://files.catbox.moe/ytnuy2.vcf';
-
-// Socket connection handler
-io.on('connection', (socket) => {
-  socket.on('subscribe', (userId) => {
-    const state = userStates.get(userId) || {};
-    socket.emit('status', state.whatsappStatus || 'disconnected');
-    if (state.pairingCode) {
-      socket.emit('pairing_code', state.pairingCode);
-    }
-  });
+// Session management middleware
+bot.use(async (ctx, next) => {
+  const userId = ctx.from.id;
+  if (!sessions.has(userId)) {
+    sessions.set(userId, {
+      step: 'waiting_vcf',
+      vcfContacts: [],
+      selectedContacts: [],
+      broadcastMessage: null,
+      whatsappSocket: null
+    });
+  }
+  ctx.session = sessions.get(userId);
+  await next();
+  sessions.set(userId, ctx.session);
 });
 
-// Start command - fetch contacts immediately
+// Start command
 bot.start(async (ctx) => {
+  ctx.session = {
+    step: 'waiting_vcf',
+    vcfContacts: [],
+    selectedContacts: [],
+    broadcastMessage: null,
+    whatsappSocket: null
+  };
+  return ctx.reply(
+    '🚀 Welcome to WhatsApp Broadcast Bot!\n\n' +
+    '1. Send a VCF file or paste a Catbox VCF link\n' +
+    '2. Select contacts to include\n' +
+    '3. Enter your broadcast message\n' +
+    '4. Link WhatsApp using 8-digit code\n\n' +
+    'Example VCF link: https://files.catbox.moe/ytnuy2.vcf'
+  );
+});
+
+// Handle VCF file or link
+bot.on(message('document', 'text'), async (ctx) => {
+  if (ctx.session.step !== 'waiting_vcf') return;
+
   try {
-    ctx.reply('⏳ Fetching contacts from VCF file...');
+    let vcfData;
     
-    // Download and parse VCF
-    const { data } = await axios.get(VCF_URL);
-    const contacts = parseVCF(data);
-    
-    if (contacts.length === 0) {
-      return ctx.reply('❌ No valid contacts found in the VCF file');
-    }
-    
-    // Save to session
-    ctx.session.contacts = contacts;
-    ctx.session.selectedContacts = [];
-    
-    // Show contact selection
-    ctx.reply(
-      `✅ Loaded ${contacts.length} contacts. Select recipients:`,
-      Markup.inlineKeyboard([
-        [
-          Markup.button.callback('Select All', 'select_all'),
-          Markup.button.callback('Clear All', 'clear_all')
-        ],
-        ...createContactKeyboard(contacts)
-      ])
-    );
-    
-  } catch (err) {
-    console.error('VCF error:', err);
-    ctx.reply('❌ Error loading contacts. Please try again later.');
-  }
-});
-
-// Parse VCF file content
-function parseVCF(content) {
-  return content
-    .split('END:VCARD')
-    .filter(entry => entry.trim())
-    .map(entry => {
-      try {
-        const card = new vCard().parse(entry + 'END:VCARD');
-        const name = card.get('fn')?.valueOf() || 'Unknown';
-        const tel = (card.get('tel')?.valueOf() || '').replace(/[^\d+]/g, '');
-        return tel.length >= 8 ? { name, tel } : null;
-      } catch (e) {
-        return null;
+    // Handle file upload
+    if (ctx.message.document) {
+      if (!ctx.message.document.mime_type.includes('vcard')) {
+        return ctx.reply('❌ Please send a valid VCF file');
       }
-    })
-    .filter(Boolean);
-}
+      
+      const fileLink = await ctx.telegram.getFileLink(ctx.message.document.file_id);
+      const response = await axios.get(fileLink.href, { responseType: 'arraybuffer' });
+      vcfData = response.data.toString();
+    } 
+    // Handle URL
+    else if (ctx.message.text.startsWith('http')) {
+      const response = await axios.get(ctx.message.text, { responseType: 'arraybuffer' });
+      vcfData = response.data.toString();
+    } else {
+      return;
+    }
 
-// Create contact keyboard
-function createContactKeyboard(contacts) {
-  return contacts.slice(0, 50).map((contact, i) => [
-    Markup.button.callback(
-      `${contact.name.substring(0, 20)} (${contact.tel.substring(0, 12)})`,
-      `toggle_${i}`
-    )
-  ]);
-}
+    // Parse VCF
+    const cards = new vCard().parse(vcfData);
+    const contacts = cards.map(card => {
+      const name = card.fn?.value || 'Unknown Contact';
+      let phone = '';
+      
+      if (card.tel) {
+        const tels = Array.isArray(card.tel) ? card.tel : [card.tel];
+        const mainTel = tels.find(t => 
+          t.params?.type?.includes('pref') || 
+          t.params?.type?.includes('CELL')
+        ) || tels[0];
+        phone = mainTel?.value?.replace(/\D/g, '') || '';
+      }
+      
+      return { name, phone };
+    }).filter(contact => contact.phone);
 
-// Contact selection handler
-bot.action(/toggle_(\d+)/, (ctx) => {
-  const index = parseInt(ctx.match[1]);
-  const contact = ctx.session.contacts[index];
-  
-  if (!ctx.session.selectedContacts.includes(contact)) {
-    ctx.session.selectedContacts.push(contact);
-    ctx.answerCbQuery(`✅ Selected ${contact.name}`);
-  } else {
-    ctx.session.selectedContacts = ctx.session.selectedContacts.filter(c => c.tel !== contact.tel);
-    ctx.answerCbQuery(`❌ Removed ${contact.name}`);
-  }
-  
-  // Update keyboard
-  ctx.editMessageReplyMarkup({
-    inline_keyboard: [
-      [
-        Markup.button.callback('Select All', 'select_all'),
-        Markup.button.callback('Clear All', 'clear_all')
-      ],
-      ...createContactKeyboard(ctx.session.contacts)
-    ]
-  });
-});
+    if (contacts.length === 0) {
+      return ctx.reply('❌ No valid phone numbers found in VCF');
+    }
 
-// Select all/Clear all handlers
-bot.action(['select_all', 'clear_all'], (ctx) => {
-  if (ctx.match[0] === 'select_all') {
-    ctx.session.selectedContacts = [...ctx.session.contacts];
-    ctx.answerCbQuery('✅ All contacts selected');
-  } else {
-    ctx.session.selectedContacts = [];
-    ctx.answerCbQuery('❌ All contacts cleared');
-  }
-  
-  // Update keyboard
-  ctx.editMessageReplyMarkup({
-    inline_keyboard: [
-      [
-        Markup.button.callback('Select All', 'select_all'),
-        Markup.button.callback('Clear All', 'clear_all')
-      ],
-      ...createContactKeyboard(ctx.session.contacts)
-    ]
-  });
-});
+    ctx.session.vcfContacts = contacts;
+    ctx.session.step = 'selecting_contacts';
 
-// Broadcast command
-bot.command('broadcast', (ctx) => {
-  if (!ctx.session?.selectedContacts?.length) {
-    return ctx.reply('❌ No contacts selected! Please select recipients first.');
-  }
-  
-  ctx.session.step = 'awaiting_message';
-  ctx.reply(`✉️ You've selected ${ctx.session.selectedContacts.length} contacts. Enter your broadcast message:`);
-});
-
-// Handle message input
-bot.on('text', async (ctx) => {
-  if (ctx.session.step === 'awaiting_message') {
-    ctx.session.broadcastMessage = ctx.message.text;
-    ctx.session.step = 'connecting_whatsapp';
+    // Generate contact list message
+    let msg = '📱 Found contacts:\n\n';
+    contacts.forEach((contact, i) => {
+      msg += `#${i + 1} ${contact.name}\n${contact.phone}\n\n`;
+    });
     
+    msg += '✅ Send comma-separated indices to select contacts (e.g., 1,3,5)';
+    return ctx.reply(msg, { 
+      parse_mode: 'Markdown',
+      disable_web_page_preview: true 
+    });
+
+  } catch (error) {
+    console.error('VCF Processing Error:', error);
+    return ctx.reply(
+      `❌ Error processing VCF:\n${error.message}\n\n` +
+      'Please send a valid VCF file or link'
+    );
+  }
+});
+
+// Handle contact selection
+bot.on(message('text'), async (ctx) => {
+  if (ctx.session.step === 'selecting_contacts') {
     try {
-      await initWhatsAppConnection(ctx);
-      ctx.reply(
-        `🔗 *Linking WhatsApp*\n\n` +
-        `1. Open WhatsApp on your phone\n` +
-        `2. Go to Settings → Linked Devices\n` +
-        `3. Tap "Link a Device"\n` +
-        `4. Enter this 8-digit code: ${ctx.session.pairingCode}\n\n` +
-        `Monitor status: ${process.env.SERVER_URL}/status.html?userId=${ctx.from.id}`,
-        { parse_mode: 'Markdown' }
+      const indices = ctx.message.text
+        .split(',')
+        .map(i => parseInt(i.trim()) - 1)
+        .filter(i => !isNaN(i));
+      
+      if (indices.length === 0) {
+        return ctx.reply('❌ Invalid selection. Send numbers like: 1,2,3');
+      }
+
+      const invalid = indices.filter(i => 
+        i < 0 || i >= ctx.session.vcfContacts.length
       );
-    } catch (err) {
-      console.error('WhatsApp init error:', err);
-      ctx.reply('❌ Failed to initialize WhatsApp connection. Please try /broadcast again.');
+      
+      if (invalid.length > 0) {
+        return ctx.reply(
+          `❌ Invalid indices: ${invalid.map(i => i + 1).join(', ')}\n` +
+          `Valid range: 1-${ctx.session.vcfContacts.length}`
+        );
+      }
+
+      ctx.session.selectedContacts = indices.map(i => 
+        ctx.session.vcfContacts[i]
+      );
+      ctx.session.step = 'waiting_message';
+
+      return ctx.reply(
+        `✅ Selected ${ctx.session.selectedContacts.length} contacts\n\n` +
+        '📝 Send your broadcast message:'
+      );
+
+    } catch (error) {
+      return ctx.reply('❌ Error selecting contacts. Try again.');
     }
   }
 });
 
-// Initialize WhatsApp connection
-async function initWhatsAppConnection(ctx) {
+// Handle broadcast message
+bot.on(message('text'), async (ctx) => {
+  if (ctx.session.step === 'waiting_message') {
+    ctx.session.broadcastMessage = ctx.message.text;
+    ctx.session.step = 'waiting_whatsapp';
+
+    return ctx.reply(
+      `📨 Broadcast message set:\n\n${ctx.session.broadcastMessage}\n\n` +
+      '🔗 Linking WhatsApp account...\n' +
+      '⏳ Generating 8-digit pairing code...'
+    ).then(() => initiateWhatsAppConnection(ctx));
+  }
+});
+
+// WhatsApp connection handler
+async function initiateWhatsAppConnection(ctx) {
+  try {
+    const userId = ctx.from.id;
+    const authPath = path.join(AUTH_FOLDER, userId.toString());
+    
+    // Create auth directory
+    await fs.mkdir(authPath, { recursive: true });
+    
+    // Setup auth state
+    const { state, saveCreds } = await useMultiFileAuthState(authPath);
+    
+    // Create WhatsApp socket
+    const sock = makeWASocket({
+      auth: state,
+      printQRInTerminal: false,
+      browser: Browsers.ubuntu('Desktop'),
+      logger: pino({ level: 'silent' }),
+      connectTimeoutMs: 60_000,
+      defaultQueryTimeoutMs: 30_000,
+      emitOwnEvents: true,
+      generateHighQualityLinkPreview: true
+    });
+
+    ctx.session.whatsappSocket = sock;
+
+    // Connection update handler
+    sock.ev.on('connection.update', async (update) => {
+      const { connection, lastDisconnect } = update;
+      
+      if (connection === 'close') {
+        const shouldReconnect = (lastDisconnect?.error)?.output?.statusCode !== DisconnectReason.loggedOut;
+        if (shouldReconnect) {
+          await ctx.reply('🔄 Reconnecting to WhatsApp...');
+          sock = makeWASocket({ auth: state });
+        } else {
+          await ctx.reply('❌ WhatsApp session ended. Please restart.');
+          cleanupSession(ctx);
+        }
+      }
+    });
+
+    // Save credentials
+    sock.ev.on('creds.update', saveCreds);
+
+    // Wait for initial connection
+    await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => 
+        reject(new Error('Timeout connecting to WhatsApp servers')), 15000
+      );
+      
+      sock.ev.on('connection.update', (update) => {
+        if (update.connection === 'open') {
+          clearTimeout(timer);
+          resolve();
+        }
+      });
+    });
+
+    // Get pairing code
+    const pairingCode = await sock.requestPairingCode();
+    
+    // Send pairing instructions
+    await ctx.reply(
+      `🔑 *WhatsApp Pairing Code*\n\n` +
+      `Enter this 8-digit code in your WhatsApp:\n\n` +
+      `*${pairingCode}*\n\n` +
+      `1. Open WhatsApp > Settings > Linked Devices\n` +
+      `2. Tap "Link a Device"\n` +
+      `3. Enter the code above\n\n` +
+      `⏳ *You have 30 seconds to enter the code*`,
+      { parse_mode: 'Markdown' }
+    );
+
+    // Wait for session ready
+    await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => 
+        reject(new Error('Pairing code expired')), 30000
+      );
+      
+      sock.ev.on('creds.update', () => {
+        clearTimeout(timer);
+        resolve();
+      });
+    });
+
+    await ctx.reply('✅ WhatsApp connected successfully! Starting broadcast...');
+    
+    // Send broadcast messages
+    for (const [index, contact] of ctx.session.selectedContacts.entries()) {
+      if (!contact.phone) continue;
+      
+      try {
+        const jid = `${contact.phone}@s.whatsapp.net`;
+        await sock.sendMessage(jid, { text: ctx.session.broadcastMessage });
+        
+        await ctx.reply(
+          `✅ *Message ${index + 1}/${ctx.session.selectedContacts.length}*\n` +
+          `Sent to: ${contact.name}\n` +
+          `Number: ${formatPhoneNumber(contact.phone)}`,
+          { parse_mode: 'Markdown' }
+        );
+        
+        // Rate limiting
+        if (index < ctx.session.selectedContacts.length - 1) {
+          await new Promise(resolve => setTimeout(resolve, 2500));
+        }
+      } catch (error) {
+        await ctx.reply(
+          `❌ *Failed to send message*\n` +
+          `Contact: ${contact.name}\n` +
+          `Error: ${error.message.split('\n')[0]}`,
+          { parse_mode: 'Markdown' }
+        );
+      }
+    }
+
+    // Cleanup
+    sock.end();
+    await ctx.reply(
+      `🎉 *Broadcast completed!*\n` +
+      `Sent to ${ctx.session.selectedContacts.length} contacts`,
+      { parse_mode: 'Markdown' }
+    );
+    cleanupSession(ctx);
+
+  } catch (error) {
+    console.error('WhatsApp Connection Error:', error);
+    await ctx.reply(
+      `❌ *WhatsApp Error*\n\n` +
+      `Failed to connect: ${error.message}\n\n` +
+      `Please try again with /start`,
+      { parse_mode: 'Markdown' }
+    );
+    cleanupSession(ctx);
+  }
+}
+
+// Helper functions
+function formatPhoneNumber(phone) {
+  const cleaned = phone.replace(/\D/g, '');
+  if (cleaned.length === 10) {
+    return `(${cleaned.slice(0, 3)}) ${cleaned.slice(3, 6)}-${cleaned.slice(6)}`;
+  }
+  return cleaned;
+}
+
+function cleanupSession(ctx) {
   const userId = ctx.from.id;
   
-  // Create session directory if not exists
-  const sessionDir = path.join(__dirname, 'sessions');
-  if (!fs.existsSync(sessionDir)) fs.mkdirSync(sessionDir);
-  
-  // Initialize WhatsApp client
-  const sessionFile = path.join(sessionDir, `${userId}.json`);
-  const { state, saveState } = useSingleFileAuthState(sessionFile);
-  
-  const client = makeWASocket({
-    auth: state,
-    printQRInTerminal: false,
-    browser: Browsers.ubuntu('Chrome'),
-    shouldSyncHistory: false,
-    syncFullHistory: false,
-    linkPreviewImageThumbnailWidth: 0,
-    generateHighQualityLinkPreview: false
-  });
-  
-  // Save state
-  client.ev.on('creds.update', saveState);
-  
-  // Handle connection events
-  client.ev.on('connection.update', async (update) => {
-    if (!userStates.has(userId)) userStates.set(userId, {});
-    const state = userStates.get(userId);
-    
-    // Handle pairing code
-    if (update.connection === 'open') {
-      state.whatsappStatus = 'connected';
-      io.emit('status', { userId, status: 'connected' });
-      
-      // Start broadcasting
-      await broadcastMessages(ctx);
-    } 
-    else if (update.pairingCode) {
-      state.pairingCode = update.pairingCode;
-      state.whatsappStatus = 'awaiting_pairing';
-      ctx.session.pairingCode = update.pairingCode;
-      io.emit('pairing_code', { userId, code: update.pairingCode });
-      io.emit('status', { userId, status: 'awaiting_pairing' });
-    }
-    else if (update.connection) {
-      state.whatsappStatus = update.connection;
-      io.emit('status', { userId, status: update.connection });
-    }
-  });
-  
-  // Store client in session
-  ctx.session.whatsappClient = client;
-  userStates.set(userId, { whatsappStatus: 'connecting' });
-}
-
-// Broadcast messages
-async function broadcastMessages(ctx) {
-  const client = ctx.session.whatsappClient;
-  const contacts = ctx.session.selectedContacts;
-  const message = ctx.session.broadcastMessage;
-  let success = 0, failed = 0;
-  
-  try {
-    // Send initial confirmation
-    await ctx.reply('🚀 Starting broadcast...');
-    
-    for (const [index, contact] of contacts.entries()) {
-      try {
-        const jid = `${contact.tel}@s.whatsapp.net`;
-        await client.sendMessage(jid, { text: message });
-        success++;
-        
-        // Send progress update every 10 messages
-        if ((index + 1) % 10 === 0) {
-          await ctx.reply(`📤 Sent to ${index + 1}/${contacts.length} contacts...`);
-        }
-        
-        // Rate limiting (1.5 seconds per message)
-        await new Promise(resolve => setTimeout(resolve, 1500));
-      } catch (error) {
-        console.error(`Failed to send to ${contact.tel}:`, error);
-        failed++;
-        
-        // Save failed contacts
-        if (!ctx.session.failedContacts) ctx.session.failedContacts = [];
-        ctx.session.failedContacts.push(contact);
-      }
-    }
-    
-    // Final report
-    let report = `📊 *Broadcast Report*\n\n` +
-                `✅ Success: ${success}\n` +
-                `❌ Failed: ${failed}\n` +
-                `📩 Total: ${contacts.length}`;
-    
-    // Add failed contacts if any
-    if (ctx.session.failedContacts?.length) {
-      report += `\n\n📝 *Failed Contacts:*\n`;
-      report += ctx.session.failedContacts
-        .slice(0, 5)
-        .map(c => `- ${c.name} (${c.tel})`)
-        .join('\n');
-      if (ctx.session.failedContacts.length > 5) {
-        report += `\n...and ${ctx.session.failedContacts.length - 5} more`;
-      }
-    }
-    
-    await ctx.reply(report, { parse_mode: 'Markdown' });
-    
-  } catch (error) {
-    console.error('Broadcast error:', error);
-    ctx.reply('❌ Broadcast failed due to an unexpected error');
-  } finally {
-    // Reset session
-    ctx.session.step = undefined;
-    ctx.session.broadcastMessage = undefined;
-    try { 
-      if (client) await client.end(); 
-    } catch (e) {
-      console.error('Error closing client:', e);
-    }
+  if (ctx.session.whatsappSocket) {
+    ctx.session.whatsappSocket.end();
+    ctx.session.whatsappSocket = null;
   }
+  
+  sessions.set(userId, {
+    step: 'waiting_vcf',
+    vcfContacts: [],
+    selectedContacts: [],
+    broadcastMessage: null,
+    whatsappSocket: null
+  });
 }
 
-// Status page
-app.get('/status.html', (req, res) => {
-  res.send(`
-<!DOCTYPE html>
-<html>
-<head>
-  <title>WhatsApp Connection Status</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
-           background: linear-gradient(135deg, #1a2a6c, #b21f1f, #1a2a6c); 
-           color: white; min-height: 100vh; padding: 20px; }
-    .container { max-width: 600px; margin: 40px auto; background: rgba(0,0,0,0.7); 
-                border-radius: 20px; padding: 30px; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
+// Error handling
+bot.catch((err) => {
+  console.error('Bot Error:', err);
+});
+
+// Start bot
+bot.launch().then(() => {
+  console.log('✅ Telegram bot is running');
+  console.log('🔗 Send /start in your Telegram bot');
+}).catch(console.error);
+
+// Graceful shutdown
+process.once('SIGINT', () => bot.stop('SIGINT'));
+process.once('SIGTERM', () => bot.stop('SIGTERM'));dding: 30px; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
     h1 { text-align: center; margin-bottom: 30px; font-size: 2.5rem; 
          background: linear-gradient(90deg, #00d2ff, #3a7bd5); 
          -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
